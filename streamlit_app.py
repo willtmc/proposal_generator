@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 import time
 import io # Needed for handling file streams
+import datetime # Import datetime for date handling
 
 # Import new libraries for file handling
 import PyPDF2
@@ -23,7 +24,7 @@ EXTRACT_ENDPOINT = f"{FASTAPI_URL}/extract-context"
 # Import database and generator functions
 try:
     from database import SessionLocal, create_proposal, add_proposal_data, get_proposal_with_data, Proposal, init_db
-    from proposal_generator import load_jinja_template, find_jinja_placeholders, fill_template_jinja, TEMPLATE_DIR # <-- Updated imports
+    from proposal_generator import load_jinja_template, find_jinja_placeholders, fill_template_jinja, TEMPLATE_DIR, get_proposal_data_as_dict # <-- Re-add get_proposal_data_as_dict
 except ImportError as e:
     st.error(f"Fatal Error: Could not import modules: {e}. Check paths and installations.")
     st.stop()
@@ -340,25 +341,52 @@ if st.session_state.template_object and st.session_state.proposal_id is not None
 
         with st.form("interview_form"):
             interview_responses = {}
+            # Define date keys
+            date_keys = {'proposal_date', 'auction_end_date', 'closing_date', 'contract_date', 'advertising_start_date'}
+            
             for key in sorted(list(st.session_state.missing_keys)):
-                default_value = st.session_state.interview_data.get(key, "")
-                # TODO: Use st.number_input for specific keys if desired
-                # Example: if key in ['marketing_facebook_cost', ...]:
+                # Get default value from state, attempt to parse if it's a date string for default widget value
+                default_value_str = st.session_state.interview_data.get(key, "")
+                
+                if key in date_keys:
+                    # Try to parse the default string back into a date object for the widget
+                    default_date = None
+                    if default_value_str:
+                        try:
+                            # Assuming format is like "March 12, 2024" stored from previous submit
+                            default_date = datetime.datetime.strptime(default_value_str, "%B %d, %Y").date()
+                        except ValueError:
+                            default_date = datetime.date.today() # Fallback if parsing fails
+                    else:
+                       default_date = datetime.date.today() # Default to today if no previous value
+                    
+                    interview_responses[key] = st.date_input(
+                        f"Select {key.replace('_', ' ').title()}", 
+                        value=default_date, 
+                        key=f"interview_{key}"
+                    )
+                # elif key in ['marketing_facebook_cost', ...]: # Future: Add number inputs here
                 #     interview_responses[key] = st.number_input(..., format="%.2f")
-                # else: 
-                interview_responses[key] = st.text_input(f"Enter value for '{key}':", value=default_value, key=f"interview_{key}")
+                else: 
+                    interview_responses[key] = st.text_input(f"Enter value for '{key}':", value=default_value_str, key=f"interview_{key}")
 
             submitted = st.form_submit_button("Submit Missing Data")
             if submitted:
                 valid_submission = True
                 final_interview_data = {}
                 for key, value in interview_responses.items():
-                    # Convert potentially numeric inputs back to string for DB
-                    # More robust handling needed if using st.number_input
-                    cleaned_value = str(value).strip()
+                    # Format dates before saving, convert others to string
+                    if key in date_keys and isinstance(value, (datetime.date, datetime.datetime)):
+                        # Format the date object into "Month Day, Year" string
+                        cleaned_value = value.strftime("%B %d, %Y") 
+                    else:
+                        cleaned_value = str(value).strip()
+                        
                     if not cleaned_value:
+                        # Note: st.date_input always returns a date, so this check is mainly for text inputs
                         st.error(f"Value for '{key}' cannot be empty.")
                         valid_submission = False
+                        
                     final_interview_data[key] = cleaned_value
 
                 if valid_submission:
