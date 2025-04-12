@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 import io # Needed for handling file streams
 import datetime # Import datetime for date handling
+import json
 
 # Import new libraries for file handling
 import PyPDF2
@@ -319,21 +320,103 @@ if st.session_state.proposal_id is not None:
                 st.session_state.template_placeholders = set()
 
 
+# --- AI Pre-fill Helper Function ---
+
+def get_ai_best_guesses(context: str, existing_data: dict, missing_keys: list[str]) -> dict:
+    """Makes a second AI call to get best guesses for missing keys."""
+    if not missing_keys:
+        return {}
+    
+    keys_to_guess_str = ", ".join(missing_keys)
+    existing_data_str = json.dumps(existing_data, indent=2)
+    
+    system_prompt = (
+        "You are an expert assistant helping pre-fill a proposal template. "
+        "Based on the provided context, existing extracted data, and common business practices, "
+        "provide reasonable default values or best guesses for the listed missing keys. "
+        "Output MUST be a valid JSON object containing ONLY the keys requested with their guessed values. "
+        "Do not include keys that were already extracted. Use standard formats (e.g., dates as YYYY-MM-DD, percentages as numbers)."
+    )
+    user_prompt = (
+        f"Context: ```{context}```\n\n"
+        f"Existing Data: ```{existing_data_str}```\n\n"
+        f"Please provide best guesses ONLY for these missing keys: {keys_to_guess_str}"
+    )
+
+    st.info(f"Asking AI for best guesses for: {keys_to_guess_str}")
+    with st.spinner("AI is generating best guesses for missing fields..."):
+        try:
+            # Reuse the client initialized earlier
+            response = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o"), 
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3, # Allow a bit more creativity for guesses
+                response_format={ "type": "json_object" } 
+            )
+            guessed_data = json.loads(response.choices[0].message.content)
+            st.success("AI provided best guesses.")
+            # Basic validation: ensure it only returned requested keys
+            valid_guesses = {k: v for k, v in guessed_data.items() if k in missing_keys}
+            if len(valid_guesses) < len(guessed_data):
+                st.warning("AI returned some unexpected keys in its guesses.")
+            return valid_guesses
+        except Exception as e:
+            st.error(f"Error getting AI best guesses: {e}")
+            return {}
+
+
 # Step 3: Interview Mode
 if st.session_state.template_object and st.session_state.proposal_id is not None:
-    st.header("3. Fill Missing Information (Interview)")
+    
+    # --- Attempt AI Pre-fill --- 
+    if 'ran_ai_prefill' not in st.session_state:
+         st.session_state.ran_ai_prefill = False # Flag to run only once per template selection
 
-    # Recalculate missing keys based on Jinja placeholders and current DB data
-    # Ensure current_proposal_data has number conversions if needed for comparison, though less critical here
-    # For simplicity, we compare against string keys from the Jinja analysis
-    st.session_state.missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
-
-    # Remove calculated keys explicitly
+    # Calculate initial missing keys
+    current_missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
     calculated_keys = {'marketing_total_budget', 'retainer_amount'}
-    st.session_state.missing_keys.difference_update(calculated_keys)
+    current_missing_keys.difference_update(calculated_keys)
+
+    # Run pre-fill if missing keys exist and haven't run it yet for this template/data combo
+    if current_missing_keys and not st.session_state.ran_ai_prefill:
+        best_guesses = get_ai_best_guesses(
+            st.session_state.combined_context_text,
+            st.session_state.current_proposal_data,
+            list(current_missing_keys)
+        )
+        
+        if best_guesses:
+            # Merge guesses with existing data
+            st.session_state.current_proposal_data.update(best_guesses)
+            # Save the merged data (including guesses) back to the database
+            db_session = SessionLocal()
+            try:
+                # Convert all values to string before saving to DB
+                save_data = {k: str(v) for k, v in best_guesses.items()}
+                add_proposal_data(db_session, st.session_state.proposal_id, save_data)
+                st.success("AI best guesses saved to database.")
+                # Recalculate missing keys after merging guesses
+                current_missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
+                current_missing_keys.difference_update(calculated_keys)
+            except Exception as e:
+                st.error(f"Failed to save AI best guesses to database: {e}")
+            finally:
+                db_session.close()
+        
+        st.session_state.ran_ai_prefill = True # Mark pre-fill as done for this cycle
+        st.rerun() # Rerun to reflect merged data and potentially skip interview
+
+    # --- Display Interview Form (if needed) --- 
+    st.header("3. Fill Missing Information (Interview)")
+    
+    # Use the potentially updated current_missing_keys
+    st.session_state.missing_keys = current_missing_keys 
 
     if not st.session_state.missing_keys:
-        st.success("All template placeholders are currently filled by the proposal data!")
+        st.success("All template placeholders are currently filled by the proposal data (including AI guesses)!")
         st.session_state.interview_data = {}
     else:
         st.warning(f"Missing data required by template: **{', '.join(sorted(list(st.session_state.missing_keys)))}**")
@@ -351,14 +434,22 @@ if st.session_state.template_object and st.session_state.proposal_id is not None
                 if key in date_keys:
                     # Try to parse the default string back into a date object for the widget
                     default_date = None
-                    if default_value_str:
+                    current_default_value = st.session_state.interview_data.get(key, None)
+                    
+                    if isinstance(current_default_value, datetime.date):
+                        # If it's already a date object, use it directly
+                        default_date = current_default_value
+                    elif isinstance(current_default_value, str) and current_default_value:
+                        # If it's a string, try parsing it
                         try:
-                            # Assuming format is like "March 12, 2024" stored from previous submit
-                            default_date = datetime.datetime.strptime(default_value_str, "%B %d, %Y").date()
+                            default_date = datetime.datetime.strptime(current_default_value, "%B %d, %Y").date()
                         except ValueError:
-                            default_date = datetime.date.today() # Fallback if parsing fails
+                            # Handle case where string is not in the expected format
+                            print(f"Warning: Could not parse date string '{current_default_value}' for key '{key}'. Defaulting to today.")
+                            default_date = datetime.date.today()
                     else:
-                       default_date = datetime.date.today() # Default to today if no previous value
+                       # Default to today if no value or not a recognizable type
+                       default_date = datetime.date.today()
                     
                     interview_responses[key] = st.date_input(
                         f"Select {key.replace('_', ' ').title()}", 
