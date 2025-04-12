@@ -392,156 +392,239 @@ def get_ai_best_guesses(client: OpenAI, context: str, existing_data: dict, missi
             return {}
 
 
-# Step 3: Interview Mode
+# Helper for date calculations
+def get_next_weekday(start_date, weekday):
+    """Find the next specific weekday (0=Mon, 6=Sun) on or after start_date."""
+    days_ahead = weekday - start_date.weekday()
+    if days_ahead < 0: # Target day already happened this week
+        days_ahead += 7
+    return start_date + datetime.timedelta(days=days_ahead)
+
+def add_business_days(start_date, days_to_add):
+    """Add business days, skipping weekends."""
+    # This is a simple implementation; edge cases like holidays aren't handled.
+    current_date = start_date
+    while days_to_add > 0:
+        current_date += datetime.timedelta(days=1)
+        weekday = current_date.weekday()
+        if weekday < 5: # Monday to Friday
+            days_to_add -= 1
+    # Ensure final date is not on weekend (adjust forward)
+    while current_date.weekday() >= 5:
+        current_date += datetime.timedelta(days=1)
+    return current_date
+
+def calculate_default_dates():
+    """Calculates default dates based on business logic."""
+    today = datetime.date.today()
+    defaults = {}
+    try:
+        # Proposal Date: Today
+        defaults['proposal_date'] = today.strftime("%B %d, %Y")
+
+        # Contract Date: Friday of the *following* week
+        contract_date_obj = get_next_weekday(today + datetime.timedelta(days=1), 4) # Find next Fri
+        if contract_date_obj.weekday() == 4 and contract_date_obj <= today + datetime.timedelta(days=7): # If it's this week's Friday or past
+            contract_date_obj = contract_date_obj + datetime.timedelta(days=7) # Move to next week's Friday
+        defaults['contract_date'] = contract_date_obj.strftime("%B %d, %Y")
+
+        # Advertising Start Date: Second Monday after Contract Date
+        adv_start_monday_1 = get_next_weekday(contract_date_obj, 0) # First Monday on or after contract date
+        adv_start_monday_2 = adv_start_monday_1 + datetime.timedelta(days=7) # Second Monday
+        defaults['advertising_start_date'] = adv_start_monday_2.strftime("%B %d, %Y")
+
+        # Auction End Date: Wednesday 3 full weeks after Advertising Start Date
+        adv_start_date_obj = adv_start_monday_2
+        auction_end_wed = get_next_weekday(adv_start_date_obj + datetime.timedelta(days=21), 2) # Find Wed >= 3 weeks later
+        defaults['auction_end_date'] = auction_end_wed.strftime("%B %d, %Y")
+
+        # Closing Date: 30 calendar days after Auction End Date, adjusted to next business day
+        auction_end_date_obj = auction_end_wed
+        closing_date_initial = auction_end_date_obj + datetime.timedelta(days=30)
+        # Adjust if weekend
+        while closing_date_initial.weekday() >= 5: # 5=Sat, 6=Sun
+            closing_date_initial += datetime.timedelta(days=1)
+        defaults['closing_date'] = closing_date_initial.strftime("%B %d, %Y")
+    except Exception as date_err:
+        print(f"Error calculating default dates: {date_err}")
+        # Return potentially partial defaults
+    return defaults
+
+DEFAULT_MARKETING_COSTS = {
+    'marketing_drone_cost': 500.00,
+    'marketing_facebook_cost': 1000.00,
+    'marketing_google_cost': 1000.00,
+    'marketing_mail_cost': 500.00,
+    'marketing_sign_cost': 250.00
+}
+
+# Step 3: Interview / Review & Edit Mode
 if st.session_state.template_object and st.session_state.proposal_id is not None:
-    
+
     # --- Attempt AI Pre-fill --- 
     if 'ran_ai_prefill' not in st.session_state:
-         st.session_state.ran_ai_prefill = False # Flag to run only once per template selection
+         st.session_state.ran_ai_prefill = False
+         # Reset flag if template changes or new proposal loaded
+         # This might need adjustment depending on exact desired flow
 
-    # Calculate initial missing keys
-    current_missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
+    # Calculate initially missing keys
+    initial_missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
     calculated_keys = {'marketing_total_budget', 'retainer_amount'}
-    current_missing_keys.difference_update(calculated_keys)
+    initial_missing_keys.difference_update(calculated_keys)
 
-    # Run pre-fill if missing keys exist and haven't run it yet for this template/data combo
-    if current_missing_keys and not st.session_state.ran_ai_prefill:
-        # Check if client was initialized successfully before calling
+    # Run AI pre-fill if missing keys exist and haven't run it yet for this cycle
+    if initial_missing_keys and not st.session_state.ran_ai_prefill:
+        # ... (AI guess logic remains the same - calls get_ai_best_guesses)
         if client:
              try:
-                 # ---> Pass the client object here <--- 
                  best_guesses = get_ai_best_guesses(
-                    client, # Pass the initialized OpenAI client
+                    client, 
                     st.session_state.combined_context_text,
                     st.session_state.current_proposal_data,
-                    list(current_missing_keys)
+                    list(initial_missing_keys)
                  )
-             except NameError: # Should not happen now, but keep as safeguard
+             except NameError: 
                   st.error("OpenAI client not initialized. Cannot get AI guesses.")
                   best_guesses = {}
         else:
              st.warning("AI Pre-fill skipped: OpenAI client not available.")
-             best_guesses = {} # Ensure best_guesses is defined
+             best_guesses = {} 
         
         if best_guesses:
-            # Merge guesses with existing data
+            # Merge AI guesses into current data
             st.session_state.current_proposal_data.update(best_guesses)
-            # Save the merged data (including guesses) back to the database
+            # Save merged data (guesses only) to DB
             db_session = SessionLocal()
             try:
-                # Convert all values to string before saving to DB
                 save_data = {k: str(v) for k, v in best_guesses.items()}
                 add_proposal_data(db_session, st.session_state.proposal_id, save_data)
                 st.success("AI best guesses saved to database.")
-                # Recalculate missing keys after merging guesses
-                current_missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
-                current_missing_keys.difference_update(calculated_keys)
             except Exception as e:
                 st.error(f"Failed to save AI best guesses to database: {e}")
             finally:
                 db_session.close()
-        
-        st.session_state.ran_ai_prefill = True # Mark pre-fill as done for this cycle
-        st.rerun() # Rerun to reflect merged data and potentially skip interview
-
-    # --- Display Interview Form (if needed) --- 
-    st.header("3. Fill Missing Information (Interview)")
-    
-    # Use the potentially updated current_missing_keys
-    st.session_state.missing_keys = current_missing_keys 
-
-    if not st.session_state.missing_keys:
-        st.success("All template placeholders are currently filled by the proposal data (including AI guesses)!")
-        st.session_state.interview_data = {}
-    else:
-        st.warning(f"Missing data required by template: **{', '.join(sorted(list(st.session_state.missing_keys)))}**")
-        st.write("Please provide values for the missing items below:")
-
-        with st.form("interview_form"):
-            interview_responses = {}
-            # Define date keys
-            date_keys = {'proposal_date', 'auction_end_date', 'closing_date', 'contract_date', 'advertising_start_date'}
-            
-            for key in sorted(list(st.session_state.missing_keys)):
-                # Get default value from state, attempt to parse if it's a date string for default widget value
-                default_value_str = st.session_state.interview_data.get(key, "")
                 
-                if key in date_keys:
-                    # Try to parse the default string back into a date object for the widget
-                    default_date = None
-                    current_default_value = st.session_state.interview_data.get(key, None)
-                    
-                    if isinstance(current_default_value, datetime.date):
-                        # If it's already a date object, use it directly
-                        default_date = current_default_value
-                    elif isinstance(current_default_value, str) and current_default_value:
-                        # If it's a string, try parsing it
+        st.session_state.ran_ai_prefill = True # Mark pre-fill as done
+        # Don't rerun here, proceed to apply defaults and show form
+
+    # --- Apply Calculated Defaults --- 
+    # Calculate defaults regardless of pre-fill run
+    default_dates = calculate_default_dates()
+    combined_defaults = {**default_dates, **DEFAULT_MARKETING_COSTS}
+    
+    # Apply defaults only if the key is STILL missing after initial load + AI guess
+    applied_defaults_count = 0
+    for key, default_value in combined_defaults.items():
+        if key not in st.session_state.current_proposal_data or not st.session_state.current_proposal_data[key]:
+            st.session_state.current_proposal_data[key] = default_value
+            applied_defaults_count += 1
+            print(f"Applied default for missing key '{key}': {default_value}")
+    
+    if applied_defaults_count > 0:
+        # Optionally save these defaults back to DB immediately
+        # Or wait until user submits the review form
+        pass # For now, just update session state
+
+    # --- Display Review/Edit Form --- 
+    st.header("3. Review and Edit Data")
+    st.write("Review the data extracted and guessed by the AI, along with calculated defaults. Make any necessary corrections before generating the proposal.")
+
+    # Determine keys required by template, excluding calculated ones
+    display_keys = st.session_state.template_placeholders - calculated_keys
+
+    with st.form("review_edit_form"):
+        edited_responses = {}
+        date_keys = {'proposal_date', 'auction_end_date', 'closing_date', 'contract_date', 'advertising_start_date'}
+        cost_keys = DEFAULT_MARKETING_COSTS.keys() # Get keys for cost inputs
+
+        for key in sorted(list(display_keys)):
+            # Get the current value from session state (includes extraction, guesses, defaults)
+            current_value = st.session_state.current_proposal_data.get(key, "")
+            
+            if key in date_keys:
+                # Parse current string value to date obj for widget
+                default_date = None
+                if isinstance(current_value, str) and current_value:
+                    try: # Try preferred format first
+                        default_date = datetime.datetime.strptime(current_value, "%B %d, %Y").date()
+                    except ValueError: # Try AI guess format
                         try:
-                            default_date = datetime.datetime.strptime(current_default_value, "%B %d, %Y").date()
+                            default_date = datetime.datetime.strptime(current_value, "%Y-%m-%d").date()
                         except ValueError:
-                            # Handle case where string is not in the expected format
-                            print(f"Warning: Could not parse date string '{current_default_value}' for key '{key}'. Defaulting to today.")
-                            default_date = datetime.date.today()
-                    else:
-                       # Default to today if no value or not a recognizable type
-                       default_date = datetime.date.today()
-                    
-                    interview_responses[key] = st.date_input(
-                        f"Select {key.replace('_', ' ').title()}", 
-                        value=default_date, 
-                        key=f"interview_{key}"
-                    )
-                # elif key in ['marketing_facebook_cost', ...]: # Future: Add number inputs here
-                #     interview_responses[key] = st.number_input(..., format="%.2f")
-                else: 
-                    interview_responses[key] = st.text_input(f"Enter value for '{key}':", value=default_value_str, key=f"interview_{key}")
-
-            submitted = st.form_submit_button("Submit Missing Data")
-            if submitted:
-                valid_submission = True
-                final_interview_data = {}
-                for key, value in interview_responses.items():
-                    # Format dates before saving, convert others to string
-                    if key in date_keys and isinstance(value, (datetime.date, datetime.datetime)):
-                        # Format the date object into "Month Day, Year" string
-                        cleaned_value = value.strftime("%B %d, %Y") 
-                    else:
-                        cleaned_value = str(value).strip()
-                        
-                    if not cleaned_value:
-                        # Note: st.date_input always returns a date, so this check is mainly for text inputs
-                        st.error(f"Value for '{key}' cannot be empty.")
-                        valid_submission = False
-                        
-                    final_interview_data[key] = cleaned_value
-
-                if valid_submission:
-                    st.session_state.interview_data = final_interview_data
-                    db_session = SessionLocal()
-                    try:
-                        # Save data as strings
-                        add_proposal_data(db_session, st.session_state.proposal_id, st.session_state.interview_data)
-                        st.success("Missing data submitted and saved to database.")
-                        # Update state - note data is stringified here
-                        st.session_state.current_proposal_data.update(st.session_state.interview_data)
-                        st.session_state.interview_data = {}
-                        # Recalculate missing keys
-                        st.session_state.missing_keys = st.session_state.template_placeholders - set(st.session_state.current_proposal_data.keys())
-                        st.session_state.missing_keys.difference_update(calculated_keys)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to save interview data to database: {e}")
-                    finally:
-                        db_session.close()
+                             print(f"Warning: Could not parse date string '{current_value}' for key '{key}'. Defaulting widget to today.")
+                             default_date = datetime.date.today()
+                elif isinstance(current_value, datetime.date):
+                     default_date = current_value # Use if already date obj
                 else:
-                    st.session_state.interview_data = interview_responses
+                   default_date = datetime.date.today() # Default if empty or other type
+                
+                edited_responses[key] = st.date_input(
+                    f"{key.replace('_', ' ').title()}", 
+                    value=default_date, 
+                    key=f"review_{key}"
+                )
+            elif key in cost_keys:
+                 # Use number input for costs
+                 default_cost = 0.0
+                 try:
+                     default_cost = float(str(current_value).replace('$','').replace(',','') or 0.0)
+                 except ValueError:
+                      print(f"Warning: Could not parse cost value '{current_value}' for key '{key}'. Defaulting widget to 0.")
+                 edited_responses[key] = st.number_input(
+                     f"{key.replace('_', ' ').title()}",
+                     value=default_cost,
+                     format="%.2f",
+                     key=f"review_{key}"
+                 )
+            else: # Standard text input for others
+                edited_responses[key] = st.text_input(f"{key.replace('_', ' ').title()}", value=str(current_value), key=f"review_{key}")
+
+        submitted = st.form_submit_button("Save Changes and Proceed")
+        if submitted:
+            valid_submission = True
+            final_edited_data = {}
+            for key, value in edited_responses.items():
+                # Format dates before saving, convert others to string
+                if key in date_keys and isinstance(value, (datetime.date, datetime.datetime)):
+                    cleaned_value = value.strftime("%B %d, %Y") 
+                else:
+                    # Convert number inputs back to string for DB consistency, or keep as number if DB supports it
+                    cleaned_value = str(value).strip()
+                    
+                if not cleaned_value:
+                    st.error(f"Value for '{key}' cannot be empty.")
+                    valid_submission = False
+                final_edited_data[key] = cleaned_value
+
+            if valid_submission:
+                # Save the potentially edited data back to DB
+                db_session = SessionLocal()
+                try:
+                    add_proposal_data(db_session, st.session_state.proposal_id, final_edited_data)
+                    st.success("Changes saved to database.")
+                    # Update session state with the final edited values
+                    st.session_state.current_proposal_data.update(final_edited_data)
+                    st.session_state.missing_keys = set() # Clear missing keys as form was submitted
+                    # Reset prefill flag for next potential run?
+                    st.session_state.ran_ai_prefill = False 
+                    st.rerun() # Rerun to proceed to Step 4 or refresh form if needed
+                except Exception as e:
+                    st.error(f"Failed to save changes to database: {e}")
+                finally:
+                    db_session.close()
+            # No else needed - form just redisplays with entered values if invalid
 
 # Step 4: Generate and Download Proposal
+# Only show if proposal exists and form was successfully submitted (implies no missing keys relevant to template)
+# We can check if final_edited_data exists from a successful submit, or simplify check
 can_generate = (
     st.session_state.template_object and
     st.session_state.proposal_id is not None and
-    not st.session_state.missing_keys
+    # Check if the review form was submitted successfully OR if initially no keys were missing
+    # A simple check could be if missing_keys is empty AFTER the review form logic
+    not st.session_state.missing_keys # Assuming successful submit clears this
 )
+
 
 if can_generate:
     st.header("4. Generate & Download Proposal")
