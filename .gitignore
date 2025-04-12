@@ -1,0 +1,16 @@
+# Environment variables
+.env
+
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd 
+
+# Database files
+proposals.db
+*.sqlite
+*.sqlite3 
