@@ -317,7 +317,8 @@ if can_generate:
              st.success("Proposal content generated successfully!")
 
         st.markdown("### Generated Proposal Preview:")
-        st.text_area("", st.session_state.final_proposal_content, height=300, key="final_preview")
+        # Add a label and hide it for the text_area
+        st.text_area("Generated Proposal Preview Text", st.session_state.final_proposal_content, height=300, key="final_preview", label_visibility="collapsed")
 
 
     # Download Button (appears after generation)
