@@ -12,5 +12,4 @@ output_proposals/
 .gitignore
 .dockerignore
 Dockerfile
-entrypoint.sh
 README.md 
