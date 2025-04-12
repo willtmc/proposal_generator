@@ -11,11 +11,24 @@ TEMPLATE_DIR = Path("templates")
 OUTPUT_DIR = Path("output_proposals")
 
 # Setup Jinja2 environment
+
+def currency_format(value):
+    """Custom Jinja filter to format a number as currency ($X,XXX.XX)."""
+    try:
+        # Convert to float first to handle potential string inputs if conversion failed earlier
+        num = float(value)
+        return "${:,.2f}".format(num)
+    except (ValueError, TypeError):
+        # Return original value if conversion fails
+        return value
+
 # We assume templates are directly in TEMPLATE_DIR
 jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATE_DIR),
     autoescape=select_autoescape([]) # Disable autoescaping for Markdown
 )
+# Register the custom filter
+jinja_env.filters['currency_format'] = currency_format
 
 # --- Helper Functions ---
 

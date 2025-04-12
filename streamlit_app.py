@@ -14,6 +14,9 @@ import docx # python-docx
 import pytesseract
 from PIL import Image # Pillow
 
+# Import OpenAI for AI interaction
+from openai import OpenAI
+
 # --- Configuration ---
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -322,7 +325,7 @@ if st.session_state.proposal_id is not None:
 
 # --- AI Pre-fill Helper Function ---
 
-def get_ai_best_guesses(context: str, existing_data: dict, missing_keys: list[str]) -> dict:
+def get_ai_best_guesses(client: OpenAI, context: str, existing_data: dict, missing_keys: list[str]) -> dict:
     """Makes a second AI call to get best guesses for missing keys."""
     if not missing_keys:
         return {}
@@ -346,7 +349,7 @@ def get_ai_best_guesses(context: str, existing_data: dict, missing_keys: list[st
     st.info(f"Asking AI for best guesses for: {keys_to_guess_str}")
     with st.spinner("AI is generating best guesses for missing fields..."):
         try:
-            # Reuse the client initialized earlier
+            # Use the passed client object
             response = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4o"), 
                 messages=[
@@ -382,12 +385,21 @@ if st.session_state.template_object and st.session_state.proposal_id is not None
 
     # Run pre-fill if missing keys exist and haven't run it yet for this template/data combo
     if current_missing_keys and not st.session_state.ran_ai_prefill:
-        best_guesses = get_ai_best_guesses(
-            st.session_state.combined_context_text,
-            st.session_state.current_proposal_data,
-            list(current_missing_keys)
-        )
-        
+        # Ensure client is initialized (needed if Streamlit script structure changes)
+        # This assumes client is defined in the global scope of streamlit_app.py
+        # If not, client initialization needs adding here or passed differently.
+        try:
+             # ---> Pass the client object here <---
+             best_guesses = get_ai_best_guesses(
+                client, # Pass the initialized OpenAI client
+                st.session_state.combined_context_text,
+                st.session_state.current_proposal_data,
+                list(current_missing_keys)
+            )
+        except NameError: # Add basic check in case client isn't defined
+             st.error("OpenAI client not initialized. Cannot get AI guesses.")
+             best_guesses = {}
+
         if best_guesses:
             # Merge guesses with existing data
             st.session_state.current_proposal_data.update(best_guesses)
@@ -525,7 +537,30 @@ if can_generate:
             retainer_amount = 10000 - marketing_total_budget
             full_context['marketing_total_budget'] = marketing_total_budget
             full_context['retainer_amount'] = retainer_amount
-
+            
+            # --- Format dates in context before rendering ---
+            date_keys_to_format = {'proposal_date', 'auction_end_date', 'closing_date', 'contract_date', 'advertising_start_date'}
+            for key in date_keys_to_format:
+                if key in full_context:
+                    try:
+                        # Attempt to parse the date (assuming YYYY-MM-DD or other common formats)
+                        date_obj = None
+                        try: # Try YYYY-MM-DD first (common AI output)
+                           date_obj = datetime.datetime.strptime(str(full_context[key]), "%Y-%m-%d").date()
+                        except ValueError: # Try Month D, YYYY (format we save from date picker)
+                           try:
+                               date_obj = datetime.datetime.strptime(str(full_context[key]), "%B %d, %Y").date()
+                           except ValueError:
+                               pass # Add more formats if needed
+                        
+                        # If parsing succeeded, format it
+                        if date_obj:
+                           full_context[key] = date_obj.strftime("%B %d, %Y") 
+                        # else: keep original string if parsing failed
+                    except Exception as fmt_e: # Catch any unexpected errors during formatting
+                         print(f"Warning: Could not parse/format date for key '{key}': {fmt_e}")
+                         # Keep original string value
+            
             # Render using Jinja template object
             st.session_state.final_proposal_content = fill_template_jinja(st.session_state.template_object, full_context)
 

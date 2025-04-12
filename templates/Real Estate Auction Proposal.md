@@ -43,29 +43,31 @@ I am pleased to present the following proposal for the sale of your Property at 
 | Item                                  | Price      |
 | :------------------------------------ | :--------- |
 | McLemore Auction Website and Newsletter | No Charge  |
-| Facebook Advertising Campaign         | ${{ "%.2f"|format(marketing_facebook_cost) }}    |
-| Google Advertising Campaign           | ${{ "%.2f"|format(marketing_google_cost) }}    |
-| Direct Mail                           | ${{ "%.2f"|format(marketing_mail_cost) }}    |
-| Drone Photography and Video Production| ${{ "%.2f"|format(marketing_drone_cost) }}    |
-| Sign Production and Installation      | ${{ "%.2f"|format(marketing_sign_cost) }}    |
-| **Total**                             | **${{ "%.2f"|format(marketing_total_budget) }}** |
+| Facebook Advertising Campaign         | {{ marketing_facebook_cost | currency_format }}    |
+| Google Advertising Campaign           | {{ marketing_google_cost | currency_format }}    |
+| Direct Mail                           | {{ marketing_mail_cost | currency_format }}    |
+| Drone Photography and Video Production| {{ marketing_drone_cost | currency_format }}    |
+| Sign Production and Installation      | {{ marketing_sign_cost | currency_format }}    |
+| **Total**                             | **{{ marketing_total_budget | currency_format }}** |
+
+*(Note: Budget items are placeholders. The total is calculated automatically.)*
 
 ## PROPOSAL OPTIONS
 
 ### Option 1: Reserve Auction Conditions
 
 1.  We will sell the Property to the highest bidder subject to your acceptance of the high bid price determined at the auction.
-2.  You will pay us ${{ '%.2f'|format(marketing_total_budget + retainer_amount) }} at the time of the execution of a Contract to Auction Real Estate. We will spend ${{ '%.2f'|format(marketing_total_budget) }} advertising the property and will retain ${{ '%.2f'|format(retainer_amount) }} as a fee for our services.
-3.  A {{ buyers_premium_percentage }}% buyer's premium will be added to the high bid price determined at the auction to arrive at the total contract sales price for the Property.
-4.  We will receive an amount equal to the {{ buyers_premium_percentage }}% buyer's premium as our commission at the real estate closing.
-5.  We will agree to reduce our commission by a total of ${{ '%.2f'|format(retainer_amount) }} at the real estate closing.
+2.  You will pay us **{{ (marketing_total_budget + retainer_amount) | currency_format }}** at the time of the execution of a Contract to Auction Real Estate. We will spend **{{ marketing_total_budget | currency_format }}** advertising the property and will retain **{{ retainer_amount | currency_format }}** as a fee for our services.
+3.  A **{{ buyers_premium_percentage }}%** buyer's premium will be added to the high bid price determined at the auction to arrive at the total contract sales price for the Property.
+4.  We will receive an amount equal to the **{{ buyers_premium_percentage }}%** buyer's premium as our commission at the real estate closing.
+5.  We will agree to reduce our commission by a total of **{{ retainer_amount | currency_format }}** at the real estate closing.
 
 ### Option 2: Absolute Auction Conditions
 
 1.  We will sell the Property to the highest bidder at absolute auction, without minimum bids or reserve.
-2.  A {{ buyers_premium_percentage }}% buyer's premium will be added to the high bid prices determined at the auction to arrive at the total contract sales price for the Property.
-3.  We will receive an amount equal to the {{ buyers_premium_percentage }}% buyer's premium as our commission at the real estate closing.
-4.  We will receive a reimbursement for auction expenses in the amount of ${{ "%.2f"|format(marketing_total_budget) }} at the real estate closing.
+2.  A **{{ buyers_premium_percentage }}%** buyer's premium will be added to the high bid prices determined at the auction to arrive at the total contract sales price for the Property.
+3.  We will receive an amount equal to the **{{ buyers_premium_percentage }}%** buyer's premium as our commission at the real estate closing.
+4.  We will receive a reimbursement for auction expenses in the amount of **{{ marketing_total_budget | currency_format }}** at the real estate closing.
 
 This proposal is provided for your consideration and acceptance at or before 5:00 pm on {{ contract_date }}, after which time it may become necessary to postpone the proposed auction date.
 
