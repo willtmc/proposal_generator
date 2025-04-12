@@ -17,6 +17,9 @@ from PIL import Image # Pillow
 # Import OpenAI for AI interaction
 from openai import OpenAI
 
+# Import dotenv for loading environment variables
+from dotenv import load_dotenv
+
 # --- Configuration ---
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -151,6 +154,24 @@ if 'interview_data' not in st.session_state:
     st.session_state.interview_data = {}
 if 'final_proposal_content' not in st.session_state:
     st.session_state.final_proposal_content = None
+
+
+# --- Initialize OpenAI Client for Streamlit --- 
+# This is needed for the AI pre-fill function
+# Load env variables FOR the client init
+load_dotenv()
+
+openai_api_key_streamlit = os.getenv("OPENAI_API_KEY")
+if not openai_api_key_streamlit:
+    # Don't raise error here, just warn, as core extraction happens in backend
+    st.warning("OPENAI_API_KEY not found for Streamlit app. AI pre-fill will be disabled.")
+    client = None # Set client to None if key is missing
+else:
+    try:
+        client = OpenAI(api_key=openai_api_key_streamlit)
+    except Exception as client_err:
+         st.error(f"Failed to initialize OpenAI client in Streamlit: {client_err}")
+         client = None
 
 
 # --- Workflow Steps ---
@@ -385,21 +406,23 @@ if st.session_state.template_object and st.session_state.proposal_id is not None
 
     # Run pre-fill if missing keys exist and haven't run it yet for this template/data combo
     if current_missing_keys and not st.session_state.ran_ai_prefill:
-        # Ensure client is initialized (needed if Streamlit script structure changes)
-        # This assumes client is defined in the global scope of streamlit_app.py
-        # If not, client initialization needs adding here or passed differently.
-        try:
-             # ---> Pass the client object here <---
-             best_guesses = get_ai_best_guesses(
-                client, # Pass the initialized OpenAI client
-                st.session_state.combined_context_text,
-                st.session_state.current_proposal_data,
-                list(current_missing_keys)
-            )
-        except NameError: # Add basic check in case client isn't defined
-             st.error("OpenAI client not initialized. Cannot get AI guesses.")
-             best_guesses = {}
-
+        # Check if client was initialized successfully before calling
+        if client:
+             try:
+                 # ---> Pass the client object here <--- 
+                 best_guesses = get_ai_best_guesses(
+                    client, # Pass the initialized OpenAI client
+                    st.session_state.combined_context_text,
+                    st.session_state.current_proposal_data,
+                    list(current_missing_keys)
+                 )
+             except NameError: # Should not happen now, but keep as safeguard
+                  st.error("OpenAI client not initialized. Cannot get AI guesses.")
+                  best_guesses = {}
+        else:
+             st.warning("AI Pre-fill skipped: OpenAI client not available.")
+             best_guesses = {} # Ensure best_guesses is defined
+        
         if best_guesses:
             # Merge guesses with existing data
             st.session_state.current_proposal_data.update(best_guesses)
